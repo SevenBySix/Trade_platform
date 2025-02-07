@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  trading_app:
+    build:
+      context: .
+      dockerfile: deployment/docker/Dockerfile.prod
+    environment:
+      - ENVIRONMENT=production
+    depends_on:
+      - timescaledb
+      - redis
+      - rabbitmq
+
+  timescaledb:
+    image: timescale/timescaledb:latest-pg14
+    environment:
+      - POSTGRES_PASSWORD=trading
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:alpine
+    volumes:
+      - redis_data:/data
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+volumes:
+  timescaledb_data:
+  redis_data:
