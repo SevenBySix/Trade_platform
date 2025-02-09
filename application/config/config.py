@@ -16,3 +16,16 @@ class ScannerConfig:
 class Config:
     def __init__(self):
         self.scanner = ScannerConfig()
+
+@dataclass
+class NewsConfig:
+    alpha_vantage_key: str = ""
+    finnhub_key: str = ""
+    min_sentiment_score: float = 0.2
+    min_news_volume: float = 0.3
+    days_to_analyze: int = 7
+
+class Config:
+    def __init__(self):
+        self.scanner = ScannerConfig()
+        self.news = NewsConfig()

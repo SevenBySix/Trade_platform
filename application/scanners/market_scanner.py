@@ -1,22 +1,22 @@
-# trading_platform/application/scanners/market_scanner.py
-
 from typing import List, Dict, Set
 import logging
 import asyncio
 import yfinance as yf
 import pandas as pd
+import numpy as np
 from datetime import datetime, timedelta
 from colorama import init, Fore, Style
-import numpy as np
+from ..config.config import Config
+from ...infrastructure.apis.news_providers.alpha_vantage import AlphaVantageNews
+from ...infrastructure.apis.news_providers.finnhub import FinnHubNews
+from ..news.news_analyzer import NewsAnalyzer
 
-# Initialize colorama for cross-platform color support
+# Initialize colorama
 init()
 
-# Configure logger with colors
 class ColoredLogger:
     def __init__(self, name):
         self.logger = logging.getLogger(name)
-        # Ensure handler isn't added multiple times
         if not self.logger.handlers:
             handler = logging.StreamHandler()
             handler.setFormatter(logging.Formatter(
@@ -39,10 +39,24 @@ class ColoredLogger:
         self.logger.info(f"{Fore.CYAN}{msg}{Style.RESET_ALL}")
 
 class MarketScanner:
-    def __init__(self, config):
+    def __init__(self, config: Config):
         self.config = config
         self.logger = ColoredLogger(__name__)
         self.filters = self._initialize_filters()
+        
+        # Initialize news providers
+        self.news_providers = []
+        if config.news.alpha_vantage_key:
+            self.news_providers.append(
+                AlphaVantageNews(config.news.alpha_vantage_key)
+            )
+        if config.news.finnhub_key:
+            self.news_providers.append(
+                FinnHubNews(config.news.finnhub_key)
+            )
+        
+        # Initialize news analyzer
+        self.news_analyzer = NewsAnalyzer(config, self.news_providers)
         
     def _initialize_filters(self) -> Dict:
         """Initialize filtering criteria"""
@@ -88,8 +102,6 @@ class MarketScanner:
             try:
                 self.logger.info(f"Fetching {index_name} components...")
                 index = yf.Ticker(index_symbol)
-                # Note: This is a placeholder as YFinance doesn't directly provide index components
-                # In production, you'd want to use a proper data source for this
                 components = self._mock_get_index_components(index_name)
                 tradable_stocks.update(components)
                 self.logger.success(f"Added {len(components)} stocks from {index_name}")
@@ -136,6 +148,8 @@ class MarketScanner:
                     try:
                         if await self._detailed_analysis(symbol):
                             stock_data = await self._gather_stock_data(symbol)
+                            # Add news analysis
+                            stock_data = await self._analyze_with_news(symbol, stock_data)
                             promising_stocks.append(stock_data)
                             self.logger.success(f"Added promising stock: {symbol}")
                     except Exception as e:
@@ -191,7 +205,7 @@ class MarketScanner:
             if len(hist) < 60:
                 return False
                 
-            # Technical analysis
+            # Calculate technical indicators
             sma_20 = hist['Close'].rolling(window=20).mean()
             sma_50 = hist['Close'].rolling(window=50).mean()
             rsi = self._calculate_rsi(hist['Close'])
@@ -269,3 +283,33 @@ class MarketScanner:
             reasons.append(f"Healthy volatility: {tech_data['volatility']:.1%}")
         
         return reasons
+
+    async def _analyze_with_news(self, symbol: str, technical_data: Dict) -> Dict:
+        """Combine technical and news analysis"""
+        # Get news analysis
+        news_data = await self.news_analyzer.analyze_stock_news(symbol)
+        
+        # Adjust technical scores based on news
+        if news_data['has_significant_news']:
+            # Get momentum and sentiment
+            momentum = technical_data['technical_data']['momentum']
+            sentiment = news_data['sentiment_score']
+            
+            # If both momentum and sentiment agree, boost the signal
+            if (momentum > 0 and sentiment > 0) or (momentum < 0 and sentiment < 0):
+                # Add news confirmation to reasons
+                technical_data['reasons'].append(
+                    f"News sentiment ({sentiment:.2f}) confirms {momentum:.1%} momentum"
+                )
+            
+            # Add news-based reasons
+            technical_data['reasons'].append(
+                f"News Analysis: {self.news_analyzer.get_news_summary(news_data)}"
+            )
+            
+            # Add recent headlines
+            headlines = [news['title'] for news in news_data['recent_news'][:3]]
+            technical_data['reasons'].extend([f"Recent: {h}" for h in headlines])
+        
+        technical_data['news_data'] = news_data
+        return technical_data
